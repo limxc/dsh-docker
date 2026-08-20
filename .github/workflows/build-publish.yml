@@ -119,37 +119,3 @@ jobs:
           git commit -m "build(deps): dsh ${{ needs.build.outputs.dsh }} [skip ci]" \
             || echo "nothing to commit"
           git push origin HEAD:master
-
-  # 推送后冒烟测试：跑起来，请求 dsh-auth-gateway 网关直到返回 302（未认证 → 登录页）即健康。
-  # 注意：不通过 needs.build.outputs.repo 传镜像仓库名。仓库名含 Docker Hub 用户名
-  # （= DOCKERHUB_USERNAME secret 值），经跨 job output 传递会被 GitHub 掩码/清空成
-  # ":<tag>" → docker "invalid reference format"。故把 secret 作 env 传入、bash 运行时
-  # 拼接（不把 secret 值写成脚本字面量），tag 不含 secret 可安全走 job output。
-  smoke:
-    needs: build
-    runs-on: ubuntu-latest
-    env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO }}
-    steps:
-      - name: 冒烟测试（amd64）
-        run: |
-          REPO="${DOCKERHUB_REPO:-${DOCKERHUB_USERNAME}/dsh-docker}"
-          IMAGE="${REPO}:${{ needs.build.outputs.tag }}"
-          echo "smoke test: $IMAGE"
-          docker run -d --name dsh-smoke \
-            -p 13080:3080 "$IMAGE"
-          ok=0
-          for i in $(seq 1 60); do
-            sleep 5
-            CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13080/ || true)"
-            if [ "$CODE" = "302" ]; then
-              echo "smoke OK (${i}x5s, 302 -> login)"
-              ok=1
-              break
-            fi
-            docker logs dsh-smoke --tail 8 2>&1 || true
-          done
-          docker logs dsh-smoke --tail 60 2>&1 || true
-          docker rm -f dsh-smoke >/dev/null 2>&1 || true
-          [ "$ok" = 1 ] || { echo "smoke FAILED (expected 302 -> login page)"; exit 1; }

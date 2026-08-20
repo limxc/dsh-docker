@@ -8,7 +8,7 @@
 #   1. check ：查询 npm registry 上 @deepseek-ai/dsh 的 latest 版本，与 versions.json
 #               对比（versions.json 只读，作为「上次已发布版本」基线）。
 #               webui / dsh-auth-gateway / dsh-market 由 dsh-market 在 Web 设置里升级，不追踪。
-#   2. build ：有更新 → 调用 build-publish.yml（构建 + 冒烟测试 + 回写 versions.json）
+#   2. build ：有更新 → 调用 build-publish.yml（构建并回写 versions.json）
 #              versions.json 的唯一写者是 build-publish.yml 的 bump job，避免多处写同一文件
 #
 # 也可在 Actions 页面手动触发（workflow_dispatch）强制检查一次。
