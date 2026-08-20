@@ -1,0 +1,18 @@
+# dsh-docker 本地构建并运行
+# 启动：docker compose -f docker-compose.build.yml up -d --build
+services:
+  dsh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dsh-docker:local
+    container_name: dsh
+    restart: unless-stopped
+    init: true
+    ports:
+      - "3080:3080"
+    volumes:
+      - ./data:/data           # DSH 配置/凭据/会话数据(持久化)
+      - ./workspace:/workspace # 你的项目目录(agent 的工作区)
+    environment:
+      DSH_HOME: /data

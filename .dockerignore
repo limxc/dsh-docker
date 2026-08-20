@@ -1,9 +1,9 @@
 .git
 .github
 LICENSE
-docker-compose.yml
 versions.json
 workspace
 data
 node_modules
 *.md
+*.yml

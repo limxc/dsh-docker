@@ -9,7 +9,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl vim ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @deepseek-ai/dsh@${DSH_VERSION}
+RUN npm install -g pnpm@11 @deepseek-ai/dsh@${DSH_VERSION}
 
 
 # 数据目录:配置、凭据、插件 profile、会话都存这里(compose 把 dsh-home 卷挂到 /data)
