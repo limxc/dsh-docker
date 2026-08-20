@@ -1,0 +1,18 @@
+# dsh-docker —— DeepSeek Harness (dsh) + dsh-web-ui 全家桶 + dsh-auth-gateway 登录门禁 + dsh-market
+# 快速开始：
+#   docker compose up -d
+#   浏览器打开 http://<主机IP>:3080 → 用 `docker logs dsh` 里的初始密码登录 → 设置个人密码
+services:
+  dsh:
+    image: limxc/dsh-docker:latest
+    pull_policy: always
+    container_name: dsh
+    restart: unless-stopped
+    init: true
+    ports:
+      - "3080:3080"
+    volumes:
+      - ./data:/data           # DSH 配置/凭据/会话数据(持久化)
+      - ./workspace:/workspace # 你的项目目录(agent 的工作区)
+    environment:
+      DSH_HOME: /data

@@ -1,0 +1,155 @@
+# 构建并推送 dsh-docker 镜像到 Docker Hub
+#
+# 触发方式：
+#   - push master：Dockerfile / 配置变更时发布（版本取 npm latest，versions.json 兜底）
+#   - workflow_call：check-updates.yml 发现 dsh 新版本后调用（显式传入新版本）
+#   - workflow_dispatch：手动构建（可选覆盖版本，Actions 页面 Run workflow）
+#
+# 镜像 tag：
+#   latest            —— 滚动最新
+#   <dsh版本>         —— 如 0.1.0-rc.7（可复现构建）
+#
+# 注：webui / dsh-auth-gateway / dsh-market 构建期按 npm latest 预装，
+# 日常升级由 dsh-market（Web 设置）管理，不参与 CI 版本追踪。
+#
+# 前置条件（仓库 Settings -> Secrets and variables -> Actions）：
+#   Secrets:
+#     DOCKERHUB_USERNAME  Docker Hub 用户名
+#     DOCKERHUB_TOKEN     Docker Hub Access Token（读写）
+#   Variables（可选）:
+#     DOCKERHUB_REPO      镜像仓库名，默认 limxc/dsh-docker
+#     PLATFORMS           构建平台，默认 linux/amd64,linux/arm64
+name: build-publish
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'supervisord.conf'
+      - 'profiles/**'
+      - 'defaults/**'
+      - 'versions.json'
+      - '.github/workflows/build-publish.yml'
+  workflow_dispatch:
+    inputs:
+      dsh_version:
+        description: '强制 dsh 版本（留空则用 npm latest）'
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      dsh_version:
+        description: 'dsh 版本（空则用 npm latest）'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      repo: ${{ steps.meta.outputs.repo }}
+      tag: ${{ steps.versions.outputs.tag }}
+      dsh: ${{ steps.versions.outputs.dsh }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 解析版本与目标仓库
+        id: meta
+        run: |
+          {
+            echo "repo=${{ vars.DOCKERHUB_REPO || 'limxc/dsh-docker' }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 解析构建版本（inputs 优先，否则 npm latest，versions.json 兜底）
+        id: versions
+        run: |
+          node scripts/resolve-versions.mjs \
+            "${{ inputs.dsh_version || '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: ${{ vars.PLATFORMS || 'linux/amd64,linux/arm64' }}
+          build-args: |
+            DSH_VERSION=${{ steps.versions.outputs.dsh }}
+          # gha 缓存：跨 run 复用构建层（mode=max 保留 apt/npm 中间层，版本变化时未变层仍命中）
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ steps.meta.outputs.repo }}:latest
+            ${{ steps.meta.outputs.repo }}:${{ steps.versions.outputs.tag }}
+
+  # versions.json 的唯一写者：用本次实际构建的版本回写并提交，保持版本记录与实际镜像一致。
+  # 所有触发方式（push / workflow_dispatch / workflow_call）都回写；[skip ci] 避免回写提交再次触发本流程。
+  bump:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 回写 versions.json
+        run: |
+          node scripts/bump-versions.mjs \
+            "${{ needs.build.outputs.dsh }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          git commit -m "build(deps): dsh ${{ needs.build.outputs.dsh }} [skip ci]" \
+            || echo "nothing to commit"
+          git push origin HEAD:master
+
+  # 推送后冒烟测试：跑起来，请求 dsh-auth-gateway 网关直到返回 302（未认证 → 登录页）即健康。
+  # 注意：不通过 needs.build.outputs.repo 传镜像仓库名。仓库名含 Docker Hub 用户名
+  # （= DOCKERHUB_USERNAME secret 值），经跨 job output 传递会被 GitHub 掩码/清空成
+  # ":<tag>" → docker "invalid reference format"。故把 secret 作 env 传入、bash 运行时
+  # 拼接（不把 secret 值写成脚本字面量），tag 不含 secret 可安全走 job output。
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO }}
+    steps:
+      - name: 冒烟测试（amd64）
+        run: |
+          REPO="${DOCKERHUB_REPO:-${DOCKERHUB_USERNAME}/dsh-docker}"
+          IMAGE="${REPO}:${{ needs.build.outputs.tag }}"
+          echo "smoke test: $IMAGE"
+          docker run -d --name dsh-smoke \
+            -p 13080:3080 "$IMAGE"
+          ok=0
+          for i in $(seq 1 60); do
+            sleep 5
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13080/ || true)"
+            if [ "$CODE" = "302" ]; then
+              echo "smoke OK (${i}x5s, 302 -> login)"
+              ok=1
+              break
+            fi
+            docker logs dsh-smoke --tail 8 2>&1 || true
+          done
+          docker logs dsh-smoke --tail 60 2>&1 || true
+          docker rm -f dsh-smoke >/dev/null 2>&1 || true
+          [ "$ok" = 1 ] || { echo "smoke FAILED (expected 302 -> login page)"; exit 1; }

@@ -1,0 +1,55 @@
+# 每日定时检查 dsh 上游更新 → 发现新版本则构建并推送 Docker Hub → 成功后回写版本号
+#
+# 时间：北京时间 02:00（cron 为 UTC 18:00）。改时区请自行换算 cron 表达式：
+#   北京时间 02:00 = UTC 18:00（前一日）→ "0 18 * * *"
+#   例如改到 UTC 02:00 就把 cron 改成 "0 2 * * *"
+#
+# 流程：
+#   1. check ：查询 npm registry 上 @deepseek-ai/dsh 的 latest 版本，与 versions.json
+#               对比（versions.json 只读，作为「上次已发布版本」基线）。
+#               webui / dsh-auth-gateway / dsh-market 由 dsh-market 在 Web 设置里升级，不追踪。
+#   2. build ：有更新 → 调用 build-publish.yml（构建 + 冒烟测试 + 回写 versions.json）
+#              versions.json 的唯一写者是 build-publish.yml 的 bump job，避免多处写同一文件
+#
+# 也可在 Actions 页面手动触发（workflow_dispatch）强制检查一次。
+name: check-updates
+
+on:
+  schedule:
+    - cron: "0 18 * * *"   # 北京时间 02:00（UTC 18:00）
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 供 workflow_call 的 build-publish 内 bump job 回写 versions.json 使用
+
+concurrency:
+  group: check-updates
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      new_dsh: ${{ steps.check.outputs.new_dsh }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 检查 npm 上游版本
+        id: check
+        run: |
+          node scripts/check-updates.mjs >> "$GITHUB_OUTPUT"
+
+      - name: 打印检查结果
+        run: |
+          echo "changed      : ${{ steps.check.outputs.changed }}"
+          echo "dsh  pinned  : ${{ steps.check.outputs.dsh }}"
+          echo "dsh  latest  : ${{ steps.check.outputs.new_dsh }}"
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    uses: ./.github/workflows/build-publish.yml
+    with:
+      dsh_version: ${{ needs.check.outputs.new_dsh }}
+    secrets: inherit

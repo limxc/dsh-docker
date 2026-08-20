@@ -1,0 +1,6 @@
+# 本地构建产物与数据
+workspace/
+data/
+*.log
+.env
+.DS_Store
