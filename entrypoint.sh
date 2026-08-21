@@ -27,6 +27,7 @@ if [ ! -f "/data/.dsh-plugins" ]; then
   dsh plugin --profile web add dsh-auth-gateway
   dsh plugin --profile web add @linxin666/dsh-web-ui-all
   dsh plugin --profile web add dshmarket
+  dsh plugin --profile web add dsh-hot-reload
   dsh --version > "/data/.dsh-plugins"
 fi
 
